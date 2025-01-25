@@ -20,7 +20,7 @@ function texture(x, y, rgba = '') {
 function parseRGBA(rgba) {
   const normalized = rgba.replace(/\s+/g, '').toLowerCase();
 
-  const pattern = /\[(?:(\d*\.?\d+)\s*\*\s*([rgbaRGBA])|([rgbaRGBA])\s*\*\s*(\d*\.?\d+)|([rgbaRGBA]))(?:\s*([+-])\s*(\d*\.?\d+))?\s*,\s*(?:(\d*\.?\d+)\s*\*\s*([rgbaRGBA])|([rgbaRGBA])\s*\*\s*(\d*\.?\d+)|([rgbaRGBA]))(?:\s*([+-])\s*(\d*\.?\d+))?\s*,\s*(?:(\d*\.?\d+)\s*\*\s*([rgbaRGBA])|([rgbaRGBA])\s*\*\s*(\d*\.?\d+)|([rgbaRGBA]))(?:\s*([+-])\s*(\d*\.?\d+))?\s*,\s*(?:(\d*\.?\d+)\s*\*\s*([rgbaRGBA])|([rgbaRGBA])\s*\*\s*(\d*\.?\d+)|([rgbaRGBA]))(?:\s*([+-])\s*(\d*\.?\d+))?\s*\]/;
+  const pattern = /\[(?:(\d*\.?\d+)\s*\*\s*([rgba])|([rgba])\s*\*\s*(\d*\.?\d+)|([rgba]))(?:\s*([+-])\s*(\d*\.?\d+))?\s*,\s*(?:(\d*\.?\d+)\s*\*\s*([rgba])|([rgba])\s*\*\s*(\d*\.?\d+)|([rgba]))(?:\s*([+-])\s*(\d*\.?\d+))?\s*,\s*(?:(\d*\.?\d+)\s*\*\s*([rgba])|([rgba])\s*\*\s*(\d*\.?\d+)|([rgba]))(?:\s*([+-])\s*(\d*\.?\d+))?\s*,\s*(?:(\d*\.?\d+)\s*\*\s*([rgba])|([rgba])\s*\*\s*(\d*\.?\d+)|([rgba]))(?:\s*([+-])\s*(\d*\.?\d+))?\s*\]/;
 
   const matches = normalized.match(pattern);
   if (!matches) return null;
@@ -163,15 +163,20 @@ function Shader({
         continue
       }
 
-      dataCoef[i] = rgbaObj.r.coef * 255
-      dataCoef[i + 1] = rgbaObj.g.coef * 255
-      dataCoef[i + 2] = rgbaObj.b.coef * 255
-      dataCoef[i + 3] = rgbaObj.a.coef * 255
+      const { r: { coef: rCoef, constant: rConstant }, 
+              g: { coef: gCoef, constant: gConstant },
+              b: { coef: bCoef, constant: bConstant }, 
+              a: { coef: aCoef, constant: aConstant } } = rgbaObj
 
-      dataConstant[i] = rgbaObj.r.constant
-      dataConstant[i + 1] = rgbaObj.g.constant
-      dataConstant[i + 2] = rgbaObj.b.constant
-      dataConstant[i + 3] = rgbaObj.a.constant
+      dataCoef[i] = rCoef * 255
+      dataCoef[i + 1] = gCoef * 255  
+      dataCoef[i + 2] = bCoef * 255
+      dataCoef[i + 3] = aCoef * 255
+
+      dataConstant[i] = rConstant * 255
+      dataConstant[i + 1] = gConstant * 255
+      dataConstant[i + 2] = bConstant * 255
+      dataConstant[i + 3] = aConstant * 255
     }
     rgbaMemo.clear()
     maxScale *= 2
@@ -238,15 +243,28 @@ function Shader({
               width={width}
               height={height}
               ref={feColorCoefRef}
-              result='coef'
+              result='colorCoefficients'
             />
             <feImage
-              id={`${id}_map3`}
+              id={`${id}_colorConstants`} 
               width={width}
               height={height}
               ref={feColorConstantRef}
+              result='colorConstants'
             />
-            <feBlend in={`coef`} in2='displacement' mode='multiply' />
+            <feBlend 
+              in='colorCoefficients' 
+              in2='displacement' 
+              mode='multiply' 
+              result='colorMultiplied' 
+            />
+            <feComposite 
+              in='colorMultiplied'
+              in2='colorConstants'
+              operator="arithmetic"
+              k2="1"
+              k3="1"
+            />
           </filter>
         </defs>
       </svg>
@@ -399,6 +417,93 @@ function Scanline({ children, debug }) {
   )
 }
 
+function Glitch({ children, debug }) {
+  const [time, setTime] = useState(Date.now())
+  const [intensity, setIntensity] = useState(0.5)
+  const [speed, setSpeed] = useState(0.5)
+
+  useEffect(() => {
+    let animationFrameId
+    const animate = () => {
+      setTime(Date.now())
+      animationFrameId = requestAnimationFrame(animate)
+    }
+    animationFrameId = requestAnimationFrame(animate)
+    return () => cancelAnimationFrame(animationFrameId)
+  }, [])
+
+  return (
+    <>
+      <Shader
+        width={240}
+        height={240}
+        debug={debug}
+        fragment={(uv) => {
+          const t = time * speed * 0.001
+
+          const sliceY = Math.floor(uv.y * 20) / 20
+          const sliceNoise = Math.random() * 2 - 1
+          const sliceShift = Math.sin(t + sliceY * 50) *
+            sliceNoise *
+            0.05 *
+            intensity
+
+          const rgbShift = Math.sin(t) * 0.003 * intensity
+
+          const noise = Math.random() * 0.1 - 0.05
+          const noiseIntensity = Math.sin(t * 10) * intensity
+
+          const scanline = Math.sin(uv.y * 100 + t * 10) * 0.02 * intensity
+
+          const glitchLine = Math.sin(uv.y * 100 + t) < 0.98 ?
+            1 :
+            (Math.random() * 0.5 + 0.5)
+
+          const offsetX = sliceShift +
+            (noise * noiseIntensity) +
+            scanline
+
+          return texture(
+            uv.x + offsetX,
+            uv.y,
+            `[
+              ${glitchLine} * r + ${rgbShift}, 
+              ${glitchLine} * g, 
+              ${glitchLine} * b - ${rgbShift}, 
+              a
+            ]`
+          )
+        }}
+      >
+        {children}
+      </Shader>
+      <br />
+      <fieldset>
+        <legend>Intensity</legend>
+        <input
+          type="range"
+          value={intensity}
+          min={0}
+          max={1}
+          step={0.01}
+          onChange={(e) => setIntensity(parseFloat(e.target.value))}
+        />
+      </fieldset>
+      <fieldset>
+        <legend>Speed</legend>
+        <input
+          type="range"
+          value={speed}
+          min={0}
+          max={2}
+          step={0.01}
+          onChange={(e) => setSpeed(parseFloat(e.target.value))}
+        />
+      </fieldset>
+    </>
+  )
+}
+
 function Pixelate({ children, debug }) {
   const [size, setSize] = useState(20)
 
@@ -539,11 +644,11 @@ function Spiral({ children, debug }) {
 }
 
 export default function Page() {
-  const [selectedShader, setShader] = useState('Scanline')
+  const [selectedShader, setShader] = useState('Glitch')
   const [showDebug, setShowDebug] = useState(false)
 
   // Other ideas: raindrops, snowflakes, black hole, glitch, CRT, etc...
-  const SelectedShader = { Scanline, MagicCarpet, Pixelate, Noise, Fractal, Spiral }[
+  const SelectedShader = { Glitch, Scanline, MagicCarpet, Pixelate, Noise, Fractal, Spiral }[
     selectedShader
   ]
 
@@ -559,6 +664,7 @@ export default function Page() {
         }}
       >
         <select onChange={(e) => setShader(e.target.value)}>
+          <option value='Glitch'>Shader: Glitch</option>
           <option value='Scanline'>Shader: Scanline</option>
           <option value='MagicCarpet'>Shader: Magic Carpet</option>
           <option value='Noise'>Shader: Noise</option>
